@@ -1,0 +1,11 @@
+{
+  "name": "Voyager AI",
+  "description": "Your intelligent travel companion powered by Gemini 2.5 Flash. Plan trips, resolve conflicting travel ideas and trade-offs, find flights and hotels, and get real-time advice.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
