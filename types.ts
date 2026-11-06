@@ -137,6 +137,7 @@ export interface Activity {
   location: string;
   description: string;
   cost: number;
+  estimatedCost?: number;
   durationMinutes: number;
   insiderTip?: string;
   completed?: boolean;
@@ -146,6 +147,7 @@ export interface ItineraryDay {
   dayNumber: number;
   date: string;
   theme: string;
+  title?: string;
   notes?: string;
   activities: Activity[];
 }
@@ -258,11 +260,15 @@ export interface Flight {
   id: string;
   airline: string;
   flightNumber: string;
+  origin?: string;
+  destination?: string;
   departureTime: string;
   arrivalTime: string;
   duration: string;
   price: number;
+  currency?: string;
   stops: number;
+  bookingLink?: string;
 }
 
 export interface Hotel {
@@ -272,10 +278,13 @@ export interface Hotel {
   rating: number;
   pricePerNight?: number;
   price?: number;
+  currency?: string;
   address?: string;
   city?: string;
   image?: string;
+  imageUrl?: string;
   amenities?: string[];
+  bookingLink?: string;
 }
 
 export interface FlightData {

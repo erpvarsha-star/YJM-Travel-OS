@@ -1,6 +1,9 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
 import { Source, WeatherData, UserProfile } from "../types";
 import { getWeatherForLocation } from "./weatherService";
+import { hasGeminiKey, localChatResponse } from "./localIntelligenceService";
+import { chatWithOpenSourceLlm, getUserLlmConfig } from "./llmRouter";
+import { inventoryToChatMarkdown, searchLiveInventory } from "./liveInventoryService";
 
 const MODEL_NAME = "gemini-2.5-flash";
 
@@ -235,11 +238,80 @@ export function sanitizeChatHistory(
   return alternating;
 }
 
+function looksLikeInventoryQuery(prompt: string): boolean {
+  return /flight|hotel|award|seats\.aero|hacker fare|split-ticket|accommodation|stay in/i.test(prompt);
+}
+
+async function inventoryAugmentedLocal(prompt: string, userProfile?: UserProfile | null): Promise<GeminiResponse> {
+  const local = localChatResponse(prompt, userProfile);
+  if (!looksLikeInventoryQuery(prompt)) {
+    return { text: local.text, sources: local.sources, weather: local.weather };
+  }
+  try {
+    const dest = prompt.match(/Active trip is "([^"]+)"/)?.[1]
+      || prompt.match(/\bto\s+([A-Za-z]{3,}(?:\s+[A-Za-z]{3,})?)/i)?.[1]
+      || 'Tokyo';
+    const origin = prompt.match(/\bfrom\s+([A-Za-z]{3,}(?:\s+[A-Za-z]{3,})?)/i)?.[1] || 'Delhi';
+    const date = prompt.match(/(\d{4}-\d{2}-\d{2})/)?.[1];
+    const mode: 'all' | 'award' | 'cash' = /award only|award space|seats\.aero/i.test(prompt)
+      ? 'award'
+      : /cash only|cash fare/i.test(prompt)
+        ? 'cash'
+        : 'all';
+    const flex = Number(prompt.match(/±\s*(\d)/)?.[1] || prompt.match(/\+(\d)\s*days?/i)?.[1] || 3);
+    const result = await searchLiveInventory({
+      origin,
+      destination: dest.trim(),
+      date,
+      cabin: userProfile?.preferences?.cabinClass || 'business',
+      flexibilityDays: Number.isFinite(flex) ? flex : 3,
+      mode,
+    });
+    return {
+      text: inventoryToChatMarkdown(result, { destination: dest.trim(), origin, date, mode }),
+      sources: [
+        { title: 'Inventory engine', uri: 'https://www.google.com/travel/flights' },
+        { title: 'OpenStreetMap hotels', uri: 'https://www.openstreetmap.org' },
+      ],
+      weather: local.weather,
+    };
+  } catch {
+    return { text: local.text, sources: local.sources, weather: local.weather };
+  }
+}
+
 export const sendMessageToGemini = async (
   prompt: string,
   history: { role: string; parts: { text: string }[] }[] = [],
   userProfile?: UserProfile | null
 ): Promise<GeminiResponse> => {
+  const ossCfg = getUserLlmConfig();
+  if (ossCfg) {
+    try {
+      const ossMessages = [
+        { role: 'system' as const, content: buildSystemInstruction(userProfile) + `\nYou are using an open-source LLM (${ossCfg.model}). Do not claim to be Gemini.` },
+        ...history.slice(-8).map((h) => ({
+          role: (h.role === 'model' || h.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+          content: h.parts?.[0]?.text || '',
+        })),
+        { role: 'user' as const, content: prompt },
+      ];
+      const ossText = await chatWithOpenSourceLlm(ossMessages, { temperature: 0.4 });
+      if (ossText) {
+        return {
+          text: ossText,
+          sources: [{ title: `Open-source LLM (${ossCfg.model})`, uri: ossCfg.baseUrl }],
+        };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  if (!hasGeminiKey()) {
+    return inventoryAugmentedLocal(prompt, userProfile);
+  }
+
   try {
     const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
     const ai = new GoogleGenAI({ apiKey: apiKey || '' });
@@ -332,9 +404,7 @@ export const sendMessageToGemini = async (
     };
   } catch (error) {
     console.error("Error calling Gemini API:", error);
-    return {
-      text: "Sorry, I encountered an error. Please try again.",
-      sources: [],
-    };
+    const local = localChatResponse(prompt, userProfile);
+    return { text: local.text, sources: local.sources, weather: local.weather };
   }
 };

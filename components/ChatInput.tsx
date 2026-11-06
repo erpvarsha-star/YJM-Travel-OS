@@ -141,7 +141,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled })
         </form>
         <div className="text-center mt-2">
            <p className="text-[10px] text-slate-400">
-             AI can make mistakes. Always check important travel info. Powered by Gemini 2.5 Flash with Google Search.
+             On-device concierge. Double-check bookings, visas, and live prices before you travel.
            </p>
         </div>
       </div>

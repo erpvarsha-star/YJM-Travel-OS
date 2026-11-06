@@ -68,10 +68,12 @@ export const searchHotelsMock = (
 
   // 3. Sort by Price
   filteredHotels.sort((a, b) => {
+    const pa = a.pricePerNight || a.price || 0;
+    const pb = b.pricePerNight || b.price || 0;
     if (sortOrder === 'price_desc') {
-      return b.pricePerNight - a.pricePerNight;
+      return pb - pa;
     }
-    return a.pricePerNight - b.pricePerNight; // Default price_asc
+    return pa - pb;
   });
 
   // 4. Return top 3-4 results

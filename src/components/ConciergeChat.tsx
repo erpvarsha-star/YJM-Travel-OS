@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Trip, ChatMessage } from '../types';
+import { localConciergeReply } from '../../services/localIntelligenceService';
 import { 
   Send, 
   Sparkles, 
@@ -74,47 +75,61 @@ export const ConciergeChat: React.FC<ConciergeChatProps> = ({
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/concierge/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userText,
-          tripContext: {
-            destination: trip.destination,
-            country: trip.country,
-            durationDays: trip.durationDays,
-            startDate: trip.startDate,
-            endDate: trip.endDate,
-            travelStyle: trip.travelStyle,
-            currency: trip.currency,
-            currencySymbol: trip.currencySymbol,
-            totalBudget: trip.totalBudget,
-            itinerary: trip.itinerary,
-            brainNotes: trip.brainNotes,
-          },
-          chatHistory: messages.slice(-6),
-        }),
-      });
-
-      const data = await response.json();
+      let reply = '';
+      let suggestions: string[] | undefined;
+      try {
+        const response = await fetch('/api/concierge/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: userText,
+            tripContext: {
+              destination: trip.destination,
+              country: trip.country,
+              durationDays: trip.durationDays,
+              startDate: trip.startDate,
+              endDate: trip.endDate,
+              travelStyle: trip.travelStyle,
+              currency: trip.currency,
+              currencySymbol: trip.currencySymbol,
+              totalBudget: trip.totalBudget,
+              itinerary: trip.itinerary,
+              brainNotes: trip.brainNotes,
+            },
+            chatHistory: messages.slice(-6),
+          }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          reply = data.reply || '';
+          suggestions = data.suggestions;
+        }
+      } catch {
+        reply = '';
+      }
+      if (!reply) {
+        reply = localConciergeReply(userText, trip).text;
+      }
       const assistantMessage: ChatMessage = {
         id: `ast-${Date.now()}`,
         role: 'assistant',
-        content: data.reply || "I'm ready to help with your trip!",
+        content: reply,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        suggestions: data.suggestions || [
-          `Where is the nearest convenience store?`,
-          `How much should I tip in ${trip.destination}?`,
+        suggestions: suggestions || [
+          `Best local dinner spots near ${trip.destination}`,
+          `How to get around cheaply on public transit?`,
+          `Key cultural rules and etiquette tips`,
         ],
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (err: any) {
       console.error('Concierge request error:', err);
+      const fallback = localConciergeReply(userText, trip).text;
       const errorMessage: ChatMessage = {
         id: `err-${Date.now()}`,
         role: 'assistant',
-        content: `I'm having a brief connection hitch. Please verify your GEMINI_API_KEY or retry in a moment.`,
+        content: fallback,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMessage]);

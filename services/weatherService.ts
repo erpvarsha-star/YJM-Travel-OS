@@ -1,4 +1,5 @@
 import { WeatherData } from "../types";
+import { getMockWeather } from "./localIntelligenceService";
 
 const GEOCODING_API = "https://geocoding-api.open-meteo.com/v1/search";
 const FORECAST_API = "https://api.open-meteo.com/v1/forecast";
@@ -19,7 +20,7 @@ export async function getWeatherForLocation(location: string): Promise<WeatherDa
 
     if (!geoData.results || geoData.results.length === 0) {
       console.warn(`No coordinates found for location: ${location}`);
-      return null;
+      return getMockWeather(location);
     }
 
     const { latitude, longitude, name, country } = geoData.results[0] as GeoResult;
@@ -30,7 +31,7 @@ export async function getWeatherForLocation(location: string): Promise<WeatherDa
     const weatherData = await weatherResponse.json();
 
     if (!weatherData.current || !weatherData.daily) {
-      return null;
+      return getMockWeather(location);
     }
 
     // 3. Format Data
@@ -58,6 +59,6 @@ export async function getWeatherForLocation(location: string): Promise<WeatherDa
 
   } catch (error) {
     console.error("Failed to fetch weather data:", error);
-    return null;
+    return getMockWeather(location);
   }
 }

@@ -55,19 +55,43 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
     setIsGenerating(true);
 
     try {
-      const generatedTrip = await generateFullTripWithAI({
-        destination: destination.trim(),
-        days: parseInt(days, 10) || 5,
-        startDate,
-        travelStyle,
-        pace,
-        budget: parseFloat(budget) || 2000,
-        currency,
-        currencySymbol,
-        companions
-      });
+      let generatedTrip: Trip | null = null;
+      try {
+        const res = await fetch('/api/itinerary/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            destination: destination.trim(),
+            days: parseInt(days, 10) || 5,
+            startDate,
+            travelStyle,
+            pace,
+            budget: parseFloat(budget) || 2000,
+            currency,
+            currencySymbol,
+            companions
+          }),
+        });
+        if (res.ok) generatedTrip = await res.json();
+      } catch {
+        generatedTrip = null;
+      }
+      if (!generatedTrip?.id) {
+        generatedTrip = await generateFullTripWithAI({
+          destination: destination.trim(),
+          days: parseInt(days, 10) || 5,
+          startDate,
+          travelStyle,
+          pace,
+          budget: parseFloat(budget) || 2000,
+          currency,
+          currencySymbol,
+          companions
+        });
+      }
 
       if (notes.trim()) {
+        generatedTrip.brainNotes = generatedTrip.brainNotes || [];
         generatedTrip.brainNotes.push({
           id: `note-${Date.now()}`,
           text: notes.trim(),
@@ -263,7 +287,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
               className="inline-flex items-center space-x-2 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white text-xs sm:text-sm font-semibold px-5 py-2.5 rounded-xl shadow-md transition-all disabled:opacity-50"
             >
               <Sparkles className={`h-4 w-4 ${isGenerating ? 'animate-spin' : ''}`} />
-              <span>{isGenerating ? 'Gemini Building Brain...' : 'Generate Full Travel Brain'}</span>
+              <span>{isGenerating ? 'Building travel workspace...' : 'Generate Full Travel Brain'}</span>
             </button>
           </div>
         </form>

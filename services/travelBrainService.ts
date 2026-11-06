@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import { 
   Trip, 
   TravelOSState, 
@@ -12,20 +11,56 @@ import {
   LoyaltyAccount,
   ConflictChoiceData
 } from '../types';
-
-// Helper to get Gemini Client safely
-function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = (typeof process !== 'undefined' && (process.env.API_KEY || process.env.GEMINI_API_KEY)) || '';
-  if (!apiKey) return null;
-  try {
-    return new GoogleGenAI({ apiKey });
-  } catch (e) {
-    console.warn("Could not initialize GoogleGenAI client", e);
-    return null;
-  }
-}
+import { generateWithAnyLlm } from './llmRouter';
 
 // Initial default rich trips so the user starts with complete, realistic data
+export function sanitizeTrip(raw: any): Trip {
+  const trip = raw || {};
+  return {
+    ...trip,
+    id: trip.id || `trip-${Date.now()}`,
+    destination: trip.destination || 'New Destination',
+    country: trip.country || 'International',
+    dates: trip.dates || '',
+    startDate: trip.startDate || '',
+    endDate: trip.endDate || '',
+    durationDays: trip.durationDays || (trip.itinerary?.length || 1),
+    travelStyle: trip.travelStyle || 'balanced',
+    pace: trip.pace || 'moderate',
+    totalBudget: trip.totalBudget || 0,
+    currency: trip.currency || 'USD',
+    currencySymbol: trip.currencySymbol || '$',
+    status: trip.status || 'planning',
+    researchInbox: trip.researchInbox || [],
+    strategies: trip.strategies || [],
+    decisionLog: trip.decisionLog || [],
+    packingList: trip.packingList || [],
+    expenses: trip.expenses || [],
+    brainNotes: trip.brainNotes || [],
+    itinerary: (trip.itinerary || []).map((day: any) => ({
+      ...day,
+      title: day.title || day.theme || `Day ${day.dayNumber}`,
+      theme: day.theme || day.title || '',
+      activities: (day.activities || []).map((act: any) => ({
+        ...act,
+        cost: act.cost ?? act.estimatedCost ?? 0,
+        estimatedCost: act.estimatedCost ?? act.cost ?? 0,
+        durationMinutes: act.durationMinutes || 60,
+        completed: Boolean(act.completed)
+      }))
+    }))
+  } as Trip;
+}
+
+export function sanitizeTravelState(raw: any): TravelOSState {
+  return {
+    profile: {
+      loyalty: raw?.profile?.loyalty || INITIAL_LOYALTY
+    },
+    trips: Array.isArray(raw?.trips) ? raw.trips.map(sanitizeTrip) : INITIAL_TRIPS
+  };
+}
+
 export const INITIAL_LOYALTY: LoyaltyAccount[] = [
   { program: "Marriott Bonvoy", balance: 145000, color: "bg-amber-500", membershipId: "MB-8829103" },
   { program: "Amex Membership Rewards", balance: 420000, color: "bg-blue-500", membershipId: "AX-449102" },
@@ -445,16 +480,13 @@ export async function generateFullTripWithAI(formData: {
   const startDate = formData.startDate || new Date().toISOString().slice(0, 10);
   
   // Calculate end date
-  const sDate = new Date(startDate);
-  sDate.setDate(sDate.getDate() + duration);
-  const endDate = sDate.toISOString().slice(0, 10);
+  const start = new Date(`${startDate}T12:00:00`);
+  const end = new Date(start);
+  end.setDate(end.getDate() + Math.max(duration - 1, 0));
+  const endDate = end.toISOString().slice(0, 10);
   const dates = `${startDate} - ${endDate}`;
 
-  const ai = getGeminiClient();
-
-  if (ai) {
-    try {
-      const prompt = `You are the master travel planner and loyalty strategist for Voyager TravelOS.
+  const tripPrompt = `You are the master travel planner and loyalty strategist for Voyager TravelOS.
 Create a comprehensive, deeply realistic travel plan for:
 Destination: ${destination}
 Duration: ${duration} days
@@ -560,72 +592,70 @@ Return ONLY a valid JSON object matching this schema:
   }
 }`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.3
-        }
+  try {
+    const llm = await generateWithAnyLlm({
+      system: 'Return only valid JSON. No markdown fences.',
+      user: tripPrompt,
+      json: true,
+      temperature: 0.3,
+    });
+    const parsed = llm ? JSON.parse(llm.text || '{}') : null;
+    if (parsed?.itinerary?.length > 0) {
+      return sanitizeTrip({
+        id: `trip-${Date.now()}`,
+        destination,
+        country: parsed.country || "Global",
+        dates,
+        startDate,
+        endDate,
+        durationDays: duration,
+        heroImage: parsed.heroImage || "https://images.unsplash.com/photo-1488646953014-85cb44e25828?auto=format&fit=crop&w=1600&q=80",
+        travelStyle,
+        pace,
+        totalBudget: budgetNum,
+        currency,
+        currencySymbol,
+        status: 'planning',
+        travellers: formData.companions || "2 Adults",
+        cabinPreference: formData.cabin || "Economy",
+        hotelPreference: formData.hotel || "4-Star Boutique",
+        decisionLog: parsed.decisionLog || [
+          `Planned for ${duration} days with ${pace} pace.`,
+          `Prioritize high CPP value on points redemptions.`
+        ],
+        researchInbox: parsed.researchInbox || [],
+        strategies: parsed.strategies || [],
+        itinerary: parsed.itinerary || [],
+        packingList: parsed.packingList || [],
+        expenses: [
+          {
+            id: `exp-init-1`,
+            title: "Estimated Initial Flights / Booking",
+            amount: Math.round(budgetNum * 0.35),
+            category: "transit",
+            date: startDate,
+            notes: "Initial flight reservation"
+          }
+        ],
+        brainNotes: [],
+        culturalInsights: parsed.culturalInsights
       });
-
-      const parsed = JSON.parse(response.text || '{}');
-      if (parsed.itinerary && parsed.itinerary.length > 0) {
-        return {
-          id: `trip-${Date.now()}`,
-          destination,
-          country: parsed.country || "Global",
-          dates,
-          startDate,
-          endDate,
-          durationDays: duration,
-          heroImage: parsed.heroImage || "https://images.unsplash.com/photo-1488646953014-85cb44e25828?auto=format&fit=crop&w=1600&q=80",
-          travelStyle,
-          pace,
-          totalBudget: budgetNum,
-          currency,
-          currencySymbol,
-          status: 'planning',
-          travellers: formData.companions || "2 Adults",
-          cabinPreference: formData.cabin || "Economy",
-          hotelPreference: formData.hotel || "4-Star Boutique",
-          decisionLog: parsed.decisionLog || [
-            `Planned for ${duration} days with ${pace} pace.`,
-            `Prioritize high CPP value on points redemptions.`
-          ],
-          researchInbox: parsed.researchInbox || [],
-          strategies: parsed.strategies || [],
-          itinerary: parsed.itinerary || [],
-          packingList: parsed.packingList || [],
-          expenses: [
-            {
-              id: `exp-init-1`,
-              title: "Estimated Initial Flights / Booking",
-              amount: Math.round(budgetNum * 0.35),
-              category: "transit",
-              date: startDate,
-              notes: "Initial flight reservation"
-            }
-          ],
-          brainNotes: [],
-          culturalInsights: parsed.culturalInsights
-        };
-      }
-    } catch (err) {
-      console.warn("Gemini API call failed, generating deterministic smart plan", err);
     }
+  } catch (err) {
+    console.warn("LLM trip generation failed, using deterministic plan", err);
   }
 
   // Fallback high-quality structured generator
   const generatedDays: ItineraryDay[] = [];
   for (let i = 1; i <= duration; i++) {
-    const curDate = new Date(sDate);
+    const curDate = new Date(start);
     curDate.setDate(curDate.getDate() + (i - 1));
     const dateStr = curDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     
     generatedDays.push({
       dayNumber: i,
       date: dateStr,
+      title: i === 1 ? `Arrival & Landmark Immersion` : i === duration ? `Farewell Highlights & Souvenirs` : `Day ${i} Discovery & Local Flavors`,
       theme: i === 1 ? `Arrival & Landmark Immersion` : i === duration ? `Farewell Highlights & Souvenirs` : `Day ${i} Discovery & Local Flavors`,
       notes: `Keep digital tickets and offline maps ready.`,
       activities: [
@@ -637,6 +667,7 @@ Return ONLY a valid JSON object matching this schema:
           location: `${destination} Central`,
           description: `Experience the iconic architectural and historic landmarks of ${destination}.`,
           cost: 15,
+          estimatedCost: 15,
           durationMinutes: 90,
           insiderTip: "Early mornings have half the crowds and optimal sunlight for photography.",
           completed: false
@@ -649,6 +680,7 @@ Return ONLY a valid JSON object matching this schema:
           location: `Old Town District, ${destination}`,
           description: `Taste celebrated local culinary delicacies and seasonal specialties.`,
           cost: 30,
+          estimatedCost: 30,
           durationMinutes: 75,
           insiderTip: "Look for stalls with lines of local office workers.",
           completed: false
@@ -661,6 +693,7 @@ Return ONLY a valid JSON object matching this schema:
           location: `Riverside / Skyline Lookout`,
           description: `Watch the sunset over ${destination} before enjoying dinner.`,
           cost: 20,
+          estimatedCost: 20,
           durationMinutes: 120,
           insiderTip: "Reserve a table by the window or terrace 2 days in advance.",
           completed: false
@@ -796,12 +829,10 @@ export async function synthesizeBrainNoteAI(noteText: string, tripContext: { des
   detectedType: 'booking' | 'recommendation' | 'scratchpad' | 'link';
   alerts?: string[];
 }> {
-  const ai = getGeminiClient();
-  if (ai) {
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Analyze this travel note for a trip to ${tripContext.destination}:
+  try {
+    const llm = await generateWithAnyLlm({
+      system: 'Return only valid JSON.',
+      user: `Analyze this travel note for a trip to ${tripContext.destination}:
 "${noteText}"
 
 Return JSON:
@@ -811,12 +842,12 @@ Return JSON:
   "detectedType": "booking" | "recommendation" | "scratchpad" | "link",
   "alerts": ["Any key deadline, confirmation number, or passport requirement detected"]
 }`,
-        config: { responseMimeType: 'application/json', temperature: 0.2 }
-      });
-      return JSON.parse(response.text || '{}');
-    } catch (e) {
-      console.warn("AI synthesis failed", e);
-    }
+      json: true,
+      temperature: 0.2,
+    });
+    if (llm?.text) return JSON.parse(llm.text);
+  } catch (e) {
+    console.warn("AI synthesis failed", e);
   }
 
   // Fallback
@@ -838,16 +869,14 @@ export async function auditTripExpensesAI(trip: Trip): Promise<{
   summaryText: string;
   savingHacks: string[];
 }> {
-  const totalSpent = trip.expenses.reduce((s, e) => s + e.amount, 0);
+  const totalSpent = (trip.expenses || []).reduce((s, e) => s + e.amount, 0);
   const budget = trip.totalBudget || 1;
   const ratio = Math.round((totalSpent / budget) * 100);
 
-  const ai = getGeminiClient();
-  if (ai) {
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Audit travel spending for ${trip.destination}.
+  try {
+    const llm = await generateWithAnyLlm({
+      system: 'Return only valid JSON.',
+      user: `Audit travel spending for ${trip.destination}.
 Budget: ${trip.currencySymbol}${budget}
 Total Spent: ${trip.currencySymbol}${totalSpent} (${ratio}% burn rate)
 Expenses: ${JSON.stringify(trip.expenses)}
@@ -858,12 +887,12 @@ Return JSON:
   "summaryText": "2 sentence financial assessment",
   "savingHacks": ["Specific hack 1 for ${trip.destination}", "Specific hack 2", "Specific hack 3"]
 }`,
-        config: { responseMimeType: 'application/json', temperature: 0.3 }
-      });
-      return JSON.parse(response.text || '{}');
-    } catch (e) {
-      console.warn("AI expense audit fallback", e);
-    }
+      json: true,
+      temperature: 0.3,
+    });
+    if (llm?.text) return JSON.parse(llm.text);
+  } catch (e) {
+    console.warn("AI expense audit fallback", e);
   }
 
   return {

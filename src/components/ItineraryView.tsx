@@ -47,12 +47,13 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
   const [newDuration, setNewDuration] = useState('60');
   const [newTip, setNewTip] = useState('');
 
-  const currentDay = trip.itinerary[selectedDayIndex] || trip.itinerary[0];
+  const itinerary = trip.itinerary || [];
+  const currentDay = itinerary[selectedDayIndex] || itinerary[0];
 
   const generatePrintableHtml = (tripData: Trip) => {
     const totalActivities = tripData.itinerary.reduce((acc, day) => acc + day.activities.length, 0);
     const totalCost = tripData.itinerary.reduce(
-      (acc, day) => acc + day.activities.reduce((dAcc, a) => dAcc + (a.estimatedCost || 0), 0),
+      (acc, day) => acc + day.activities.reduce((dAcc, a) => dAcc + (a.estimatedCost ?? a.cost ?? 0), 0),
       0
     );
 
@@ -93,7 +94,7 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
             <!-- Day Header -->
             <div style="background: #0f172a; color: #ffffff; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center;">
               <div style="font-weight: 700; font-size: 13.5px;">
-                Day ${day.dayNumber}: ${day.title}
+                Day ${day.dayNumber}: ${day.title || day.theme}
               </div>
               <div style="font-size: 11px; color: #94a3b8; font-weight: 500;">
                 ${day.date ? day.date + ' &bull; ' : ''}${day.theme ? 'Theme: ' + day.theme : ''}
@@ -119,7 +120,7 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
                       </span>
                     </div>
                     <div style="text-align: right; font-size: 11px; color: #64748b; font-weight: 600;">
-                      ${act.estimatedCost > 0 ? `${tripData.currencySymbol}${act.estimatedCost.toLocaleString()}` : 'Free'}
+                      ${(act.estimatedCost ?? act.cost ?? 0) > 0 ? `${tripData.currencySymbol}${(act.estimatedCost ?? act.cost ?? 0).toLocaleString()}` : 'Free'}
                       <span style="font-size: 10px; font-weight: 400; color: #94a3b8; margin-left: 4px;">(${act.durationMinutes}m)</span>
                     </div>
                   </div>
@@ -200,9 +201,9 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
     content += `Currency: ${trip.currency} (${trip.currencySymbol})\n`;
     content += `Pace: ${trip.pace || 'Balanced'}\n\n`;
 
-    trip.itinerary.forEach((day) => {
+    itinerary.forEach((day) => {
       content += `-------------------------------------\n`;
-      content += `DAY ${day.dayNumber}: ${day.title.toUpperCase()}\n`;
+          content += `DAY ${day.dayNumber}: ${(day.title || day.theme || 'Plan').toUpperCase()}\n`;
       if (day.date) content += `Date: ${day.date}\n`;
       if (day.theme) content += `Theme: ${day.theme}\n`;
       content += `-------------------------------------\n\n`;
@@ -213,7 +214,7 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
         day.activities.forEach((act) => {
           content += `* [${act.time}] ${act.title} (${act.category.toUpperCase()})\n`;
           content += `  Location: ${act.location}\n`;
-          content += `  Duration: ${act.durationMinutes} mins | Cost: ${act.estimatedCost > 0 ? `${trip.currencySymbol}${act.estimatedCost}` : 'Free'}\n`;
+          content += `  Duration: ${act.durationMinutes} mins | Cost: ${(act.estimatedCost ?? act.cost ?? 0) > 0 ? `${trip.currencySymbol}${act.estimatedCost ?? act.cost}` : 'Free'}\n`;
           content += `  Details: ${act.description}\n`;
           if (act.insiderTip) {
             content += `  Insider Tip: ${act.insiderTip}\n`;
@@ -238,7 +239,7 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
   };
 
   const toggleActivityCompletion = (dayNumber: number, activityId: string) => {
-    const updatedItinerary = trip.itinerary.map((day) => {
+    const updatedItinerary = itinerary.map((day) => {
       if (day.dayNumber === dayNumber) {
         return {
           ...day,
@@ -254,7 +255,7 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
   };
 
   const deleteActivity = (dayNumber: number, activityId: string) => {
-    const updatedItinerary = trip.itinerary.map((day) => {
+    const updatedItinerary = itinerary.map((day) => {
       if (day.dayNumber === dayNumber) {
         return {
           ...day,
@@ -278,13 +279,14 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
       description: newDesc.trim() || 'Custom itinerary event.',
       category: newCategory,
       location: newLocation.trim() || trip.destination,
+      cost: parseFloat(newCost) || 0,
       estimatedCost: parseFloat(newCost) || 0,
       durationMinutes: parseInt(newDuration, 10) || 60,
       insiderTip: newTip.trim() || undefined,
       completed: false,
     };
 
-    const updatedItinerary = trip.itinerary.map((day) => {
+    const updatedItinerary = itinerary.map((day) => {
       if (day.dayNumber === currentDay.dayNumber) {
         return {
           ...day,
@@ -346,7 +348,7 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
       {/* Day Selector Pills */}
       <div className="flex items-center justify-between overflow-x-auto pb-2 border-b border-stone-200 gap-2">
         <div className="flex items-center space-x-2 shrink-0">
-          {trip.itinerary.map((day, idx) => {
+          {itinerary.map((day, idx) => {
             const isSelected = idx === selectedDayIndex;
             return (
               <button
@@ -442,7 +444,7 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
             <div className="text-xs font-semibold uppercase tracking-wider text-amber-600 mb-1">
               Day {currentDay.dayNumber} Plan {currentDay.date ? `• ${currentDay.date}` : ''}
             </div>
-            <h2 className="text-xl font-semibold text-stone-900">{currentDay.title}</h2>
+            <h2 className="text-xl font-semibold text-stone-900">{currentDay.title || currentDay.theme}</h2>
             <p className="text-xs text-stone-500 mt-0.5">
               Theme: <span className="font-medium text-stone-700">{currentDay.theme}</span>
             </p>
@@ -452,13 +454,13 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
             <button
               onClick={() =>
                 onAskConcierge(
-                  `Give me 3 secret local food or café spots close to Day ${currentDay.dayNumber} in ${trip.destination} (${currentDay.title}).`
+                  `Give me 3 secret local food or café spots close to Day ${currentDay.dayNumber} in ${trip.destination} (${currentDay.title || currentDay.theme}).`
                 )
               }
               className="inline-flex items-center space-x-1.5 text-xs font-medium bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 px-3 py-1.5 rounded-lg transition-colors"
             >
               <Sparkles className="h-3.5 w-3.5 text-amber-600" />
-              <span>Ask Gemini for Gems Near Here</span>
+              <span>Ask Concierge for Gems Near Here</span>
             </button>
           </div>
         </div>
@@ -551,8 +553,8 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
                     <div className="flex flex-col items-end space-y-2 shrink-0">
                       <div className="text-right">
                         <div className="text-xs font-semibold text-stone-900">
-                          {act.estimatedCost > 0
-                            ? `${trip.currencySymbol}${act.estimatedCost.toLocaleString()}`
+                          {(act.estimatedCost ?? act.cost ?? 0) > 0
+                            ? `${trip.currencySymbol}${(act.estimatedCost ?? act.cost).toLocaleString()}`
                             : 'Free'}
                         </div>
                         <div className="text-[10px] text-stone-400">{act.durationMinutes} mins</div>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Trip, PackingItem } from '../types';
+import { generatePackingItems } from '../../services/localIntelligenceService';
 import { 
   CheckSquare, 
   Square, 
@@ -26,23 +27,24 @@ export const PackingView: React.FC<PackingViewProps> = ({ trip, onUpdateTrip }) 
   const [newItemQuantity, setNewItemQuantity] = useState('1');
   const [isGenerating, setIsGenerating] = useState(false);
 
-  const totalItems = trip.packingList.length;
-  const packedItems = trip.packingList.filter((item) => item.packed).length;
-  const essentialTotal = trip.packingList.filter((item) => item.essential).length;
-  const essentialPacked = trip.packingList.filter((item) => item.essential && item.packed).length;
+  const packingList = trip.packingList || [];
+  const totalItems = packingList.length;
+  const packedItems = packingList.filter((item) => item.packed).length;
+  const essentialTotal = packingList.filter((item) => item.essential).length;
+  const essentialPacked = packingList.filter((item) => item.essential && item.packed).length;
   const progressPercent = totalItems > 0 ? Math.round((packedItems / totalItems) * 100) : 0;
 
-  const categories = Array.from(new Set(trip.packingList.map((item) => item.category)));
+  const categories = Array.from(new Set(packingList.map((item) => item.category)));
 
   const togglePacked = (id: string) => {
-    const updated = trip.packingList.map((item) =>
+    const updated = packingList.map((item) =>
       item.id === id ? { ...item, packed: !item.packed } : item
     );
     onUpdateTrip({ ...trip, packingList: updated });
   };
 
   const deleteItem = (id: string) => {
-    const updated = trip.packingList.filter((item) => item.id !== id);
+    const updated = packingList.filter((item) => item.id !== id);
     onUpdateTrip({ ...trip, packingList: updated });
   };
 
@@ -61,7 +63,7 @@ export const PackingView: React.FC<PackingViewProps> = ({ trip, onUpdateTrip }) 
 
     onUpdateTrip({
       ...trip,
-      packingList: [...trip.packingList, newItem],
+      packingList: [...packingList, newItem],
     });
 
     setNewItemName('');
@@ -71,37 +73,48 @@ export const PackingView: React.FC<PackingViewProps> = ({ trip, onUpdateTrip }) 
   const handleGenerateWeatherGear = async () => {
     setIsGenerating(true);
     try {
-      const res = await fetch('/api/packing/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      let items: PackingItem[] = [];
+      try {
+        const res = await fetch('/api/packing/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            destination: trip.destination,
+            durationDays: trip.durationDays,
+            travelStyle: trip.travelStyle,
+            month: trip.startDate ? new Date(trip.startDate).toLocaleString('default', { month: 'long' }) : 'October',
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.items && Array.isArray(data.items)) items = data.items;
+        }
+      } catch {
+        items = [];
+      }
+      if (!items.length) {
+        items = generatePackingItems({
           destination: trip.destination,
           durationDays: trip.durationDays,
           travelStyle: trip.travelStyle,
           month: trip.startDate ? new Date(trip.startDate).toLocaleString('default', { month: 'long' }) : 'October',
-        }),
-      });
-
-      const data = await res.json();
-      if (data.items && Array.isArray(data.items)) {
-        // Merge without duplicating existing names
-        const existingNames = new Set(trip.packingList.map((i) => i.name.toLowerCase()));
-        const newItems: PackingItem[] = data.items
-          .filter((i: any) => !existingNames.has(i.name.toLowerCase()))
-          .map((i: any) => ({
-            id: `pack-ai-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-            name: i.name,
-            category: i.category || 'Gear',
-            essential: Boolean(i.essential),
-            quantity: i.quantity || 1,
-            packed: false,
-          }));
-
-        onUpdateTrip({
-          ...trip,
-          packingList: [...trip.packingList, ...newItems],
         });
       }
+      const existingNames = new Set(packingList.map((i) => i.name.toLowerCase()));
+      const newItems: PackingItem[] = items
+        .filter((i) => !existingNames.has(i.name.toLowerCase()))
+        .map((i) => ({
+          id: `pack-ai-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          name: i.name,
+          category: i.category || 'Gear',
+          essential: Boolean(i.essential),
+          quantity: i.quantity || 1,
+          packed: false,
+        }));
+      onUpdateTrip({
+        ...trip,
+        packingList: [...packingList, ...newItems],
+      });
     } catch (err) {
       console.error('Failed to generate packing list:', err);
     } finally {
@@ -109,7 +122,7 @@ export const PackingView: React.FC<PackingViewProps> = ({ trip, onUpdateTrip }) 
     }
   };
 
-  const filteredItems = trip.packingList.filter((item) => {
+  const filteredItems = packingList.filter((item) => {
     if (selectedCategory === 'all') return true;
     if (selectedCategory === 'essential') return item.essential;
     return item.category === selectedCategory;
@@ -139,7 +152,7 @@ export const PackingView: React.FC<PackingViewProps> = ({ trip, onUpdateTrip }) 
             className="inline-flex items-center space-x-2 bg-stone-900 hover:bg-stone-800 text-white text-xs font-medium px-3.5 py-2 rounded-xl transition-all shadow-sm disabled:opacity-50"
           >
             <CloudSun className={`h-4 w-4 text-amber-400 ${isGenerating ? 'animate-bounce' : ''}`} />
-            <span>{isGenerating ? 'Analyzing Climate Forecast...' : 'Gemini Climate Sync'}</span>
+            <span>{isGenerating ? 'Calibrating climate list...' : 'Climate Packing Sync'}</span>
           </button>
         </div>
 

@@ -40,7 +40,8 @@ export const ExpenseView: React.FC<ExpenseViewProps> = ({ trip, onUpdateTrip }) 
     savingHacks?: string[];
   } | null>(null);
 
-  const totalSpent = trip.expenses.reduce((sum, exp) => sum + exp.amount, 0);
+  const expenses = trip.expenses || [];
+  const totalSpent = expenses.reduce((sum, exp) => sum + exp.amount, 0);
   const budget = trip.totalBudget || 1;
   const remaining = budget - totalSpent;
   const burnPercent = Math.min(100, Math.round((totalSpent / budget) * 100));
@@ -55,7 +56,7 @@ export const ExpenseView: React.FC<ExpenseViewProps> = ({ trip, onUpdateTrip }) 
     other: 0,
   };
 
-  trip.expenses.forEach((exp) => {
+  expenses.forEach((exp) => {
     categoryTotals[exp.category] = (categoryTotals[exp.category] || 0) + exp.amount;
   });
 
@@ -74,7 +75,7 @@ export const ExpenseView: React.FC<ExpenseViewProps> = ({ trip, onUpdateTrip }) 
 
     onUpdateTrip({
       ...trip,
-      expenses: [newExpense, ...trip.expenses],
+      expenses: [newExpense, ...expenses],
     });
 
     setTitle('');
@@ -86,7 +87,7 @@ export const ExpenseView: React.FC<ExpenseViewProps> = ({ trip, onUpdateTrip }) 
   const handleDeleteExpense = (id: string) => {
     onUpdateTrip({
       ...trip,
-      expenses: trip.expenses.filter((e) => e.id !== id),
+      expenses: expenses.filter((e) => e.id !== id),
     });
   };
 
@@ -257,13 +258,13 @@ export const ExpenseView: React.FC<ExpenseViewProps> = ({ trip, onUpdateTrip }) 
       <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-sm">
         <div className="p-4 border-b border-stone-200 flex items-center justify-between">
           <span className="text-xs font-bold uppercase tracking-wider text-stone-500">
-            Transaction Ledger ({trip.expenses.length})
+            Transaction Ledger ({expenses.length})
           </span>
-          {trip.expenses.length > 0 && (
+          {expenses.length > 0 && (
             <button
               onClick={() => {
                 const header = ['ID', 'Date', 'Category', 'Description', 'Amount', 'Currency', 'Notes'];
-                const rows = trip.expenses.map(e => [
+                const rows = expenses.map(e => [
                   `"${e.id}"`,
                   `"${e.date}"`,
                   `"${e.category}"`,
@@ -290,13 +291,13 @@ export const ExpenseView: React.FC<ExpenseViewProps> = ({ trip, onUpdateTrip }) 
           )}
         </div>
 
-        {trip.expenses.length === 0 ? (
+        {expenses.length === 0 ? (
           <div className="text-center py-10 text-stone-400 text-xs">
             No expenses logged yet. Tap 'Log Expense' to keep track!
           </div>
         ) : (
           <div className="divide-y divide-stone-100">
-            {trip.expenses.map((exp) => (
+            {expenses.map((exp) => (
               <div
                 key={exp.id}
                 id={`exp-row-${exp.id}`}

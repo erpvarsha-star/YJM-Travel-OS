@@ -20,8 +20,7 @@ import {
 } from './types';
 
 // Services
-import { sendMessageToGemini } from './services/geminiService';
-import { INITIAL_LOYALTY, INITIAL_TRIPS, generateFullTripWithAI } from './services/travelBrainService';
+import { INITIAL_LOYALTY, INITIAL_TRIPS, sanitizeTravelState } from './services/travelBrainService';
 
 // TravelOS Workspace Components
 import { ItineraryView } from './src/components/ItineraryView';
@@ -40,6 +39,8 @@ import { UserProfileModal } from './components/UserProfileModal';
 import { SavedTripsModal } from './components/SavedTripsModal';
 import { MessageBubble } from './components/MessageBubble';
 import { ChatInput } from './components/ChatInput';
+import { LiveInventoryBoard } from './components/LiveInventoryBoard';
+import { InventoryResult } from './services/liveInventoryService';
 
 type ActiveTab = 'strategy' | 'itinerary' | 'search' | 'packing' | 'expenses' | 'brain' | 'culture';
 
@@ -50,7 +51,7 @@ export const App: React.FC = () => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed.trips && parsed.trips.length > 0) return parsed;
+        if (parsed.trips && parsed.trips.length > 0) return sanitizeTravelState(parsed);
       } catch (e) {
         console.error("Failed to parse travel_os_state", e);
       }
@@ -214,7 +215,14 @@ export const App: React.FC = () => {
       }));
 
     try {
-      const response = await sendMessageToGemini(contextualPrompt, history, userProfile);
+      const chatRes = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: contextualPrompt, history, userProfile }),
+      });
+      const response = chatRes.ok
+        ? await chatRes.json()
+        : { text: 'Chat service unavailable. Try again in a moment.' };
 
       setMessages(prev => {
         const filtered = prev.filter(msg => msg.id !== loadingId);
@@ -231,7 +239,7 @@ export const App: React.FC = () => {
         ];
       });
     } catch (e) {
-      console.error("Gemini Error", e);
+      console.error("Chat Error", e);
       setMessages(prev => {
         const filtered = prev.filter(msg => msg.id !== loadingId);
         return [
@@ -239,7 +247,7 @@ export const App: React.FC = () => {
           {
             id: (Date.now() + 2).toString(),
             role: 'model',
-            content: `I ran into an issue connecting to Gemini. Please verify your internet connection or API settings.`,
+            content: `I ran into an issue connecting to the travel concierge. Retry in a moment — on-device mode still works for packing, culture, and itinerary.`,
             timestamp: Date.now()
           }
         ];
@@ -836,8 +844,21 @@ export const App: React.FC = () => {
                       </button>
                     </div>
 
+                    {activeTrip && (
+                      <LiveInventoryBoard
+                        trip={activeTrip}
+                        origin="Delhi"
+                        onSaveResearch={(result: InventoryResult) => {
+                          handleUpdateActiveTrip({
+                            ...activeTrip,
+                            researchInbox: result.research.length ? result.research : activeTrip.researchInbox,
+                          });
+                        }}
+                      />
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {activeTrip.researchInbox.map(item => (
+                      {(activeTrip.researchInbox || []).map(item => (
                         <div key={item.id} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
                           <div>
                             <div className="flex justify-between items-start mb-2">

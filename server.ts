@@ -2,6 +2,10 @@ import express from 'express';
 import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import { localConciergeReply, generateCulturalInsights, generatePackingItems } from './services/localIntelligenceService';
+import { generateFullTripWithAI, auditTripExpensesAI, INITIAL_TRIPS } from './services/travelBrainService';
+import { searchLiveInventory } from './services/liveInventoryService';
+import { generateWithAnyLlm, getGeminiKey, llmProviderLabel } from './services/llmRouter';
 
 async function startServer() {
   const app = express();
@@ -12,10 +16,16 @@ async function startServer() {
   app.post('/api/intelligence', async (req, res) => {
     try {
       const { currentState, input } = req.body;
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = getGeminiKey();
       
       if (!apiKey) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+        const state = currentState || { profile: { loyalty: [] }, trips: INITIAL_TRIPS };
+        const dest = String(input || '').match(/to ([A-Za-z ]+)/i)?.[1]?.trim();
+        if (dest && Array.isArray(state.trips)) {
+          const generated = await generateFullTripWithAI({ destination: dest, days: 5 });
+          state.trips = [generated, ...state.trips.filter((t: any) => t.id !== generated.id)];
+        }
+        return res.json(state);
       }
 
       const ai = new GoogleGenAI({ apiKey });
@@ -58,65 +68,93 @@ Output: Return ONLY raw JSON. No markdown, no 'Here is your update'. Just the JS
     }
   });
 
-  // Itinerary generation route
+  app.get('/api/llm/status', (_req, res) => {
+    res.json({ provider: llmProviderLabel() });
+  });
+
+  app.post('/api/chat', async (req, res) => {
+    try {
+      const { prompt, history, userProfile } = req.body || {};
+      const { sendMessageToGemini } = await import('./services/geminiService');
+      const result = await sendMessageToGemini(prompt || '', history || [], userProfile);
+      return res.json(result);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message || 'Chat failed' });
+    }
+  });
+
+  app.post('/api/inventory/search', async (req, res) => {
+    try {
+      const result = await searchLiveInventory(req.body || {});
+      return res.json(result);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message || 'Inventory search failed' });
+    }
+  });
+
+  app.post('/api/packing/generate', async (req, res) => {
+    const items = generatePackingItems(req.body || {});
+    return res.json({ items });
+  });
+
   app.post('/api/itinerary/generate', async (req, res) => {
     try {
-      const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-      if (!apiKey) return res.status(500).json({ error: 'API key missing' });
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Create an itinerary for ${JSON.stringify(req.body)}. Return raw JSON.`,
-        config: { responseMimeType: 'application/json' }
-      });
-      res.json(JSON.parse(response.text || '{}'));
+      const trip = await generateFullTripWithAI(req.body || { destination: 'Tokyo', days: 5 });
+      return res.json(trip);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      const trip = await generateFullTripWithAI(req.body || { destination: 'Tokyo', days: 5 });
+      res.json(trip);
     }
   });
 
-  // Cultural intelligence route
   app.post('/api/cultural/generate', async (req, res) => {
     try {
-      const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-      if (!apiKey) return res.status(500).json({ error: 'API key missing' });
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Generate cultural emergency numbers, etiquette, phrases with phonetics, and local hacks for: ${JSON.stringify(req.body)}. Return JSON.`,
-        config: { responseMimeType: 'application/json' }
+      const dest = req.body?.destination || 'Tokyo';
+      const llm = await generateWithAnyLlm({
+        system: 'Return only valid JSON for cultural travel intel.',
+        user: `Generate cultural emergency numbers, etiquette, phrases with phonetics, and local hacks for: ${JSON.stringify(req.body)}. Return JSON.`,
+        json: true,
       });
-      res.json(JSON.parse(response.text || '{}'));
+      if (llm?.text) {
+        const parsed = JSON.parse(llm.text);
+        if (parsed.emergencyNumbers) return res.json(parsed);
+      }
+      return res.json(generateCulturalInsights(dest, req.body?.country));
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.json(generateCulturalInsights(req.body?.destination || 'Tokyo', req.body?.country));
     }
   });
 
-  // Budget audit route
   app.post('/api/budget/audit', async (req, res) => {
     try {
-      const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-      if (!apiKey) return res.status(500).json({ error: 'API key missing' });
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Audit this travel expense data: ${JSON.stringify(req.body)}. Return JSON with auditScore, summaryText, and savingHacks array.`,
-        config: { responseMimeType: 'application/json' }
-      });
-      res.json(JSON.parse(response.text || '{}'));
+      const result = await auditTripExpensesAI(req.body);
+      return res.json(result);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  // Concierge chat route
   app.post('/api/concierge/chat', async (req, res) => {
     try {
-      const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-      if (!apiKey) return res.status(500).json({ error: 'API key missing' });
-      const ai = new GoogleGenAI({ apiKey });
-
       const { message, tripContext, chatHistory } = req.body;
+      const suggestions = [
+        `Best local dinner spots near ${tripContext?.destination || 'destination'}`,
+        `How to get around cheaply on public transit?`,
+        `Key cultural rules and etiquette tips`
+      ];
+      const llm = await generateWithAnyLlm({
+        system: `You are the Voyager Travel Concierge. Practical advice for: ${JSON.stringify(tripContext || {})}. Markdown only.`,
+        user: message || 'Hello',
+        temperature: 0.4,
+      });
+      if (llm?.text) return res.json({ reply: llm.text, suggestions });
+
+      const apiKey = getGeminiKey();
+      if (!apiKey) {
+        const local = localConciergeReply(message || 'Hello', tripContext);
+        return res.json({ reply: local.text, suggestions });
+      }
+      const ai = new GoogleGenAI({ apiKey });
 
       // Sanitize chat history so it starts with a user turn and strictly alternates
       const validHistory: { role: 'user' | 'model'; parts: [{ text: string }] }[] = [];
@@ -167,7 +205,15 @@ Output: Return ONLY raw JSON. No markdown, no 'Here is your update'. Just the JS
       });
     } catch (e: any) {
       console.error("Concierge API error:", e);
-      res.status(500).json({ error: e.message });
+      const local = localConciergeReply(req.body?.message || 'Hello', req.body?.tripContext);
+      res.json({
+        reply: local.text,
+        suggestions: [
+          `Best local dinner spots near ${req.body?.tripContext?.destination || 'destination'}`,
+          `How to get around cheaply on public transit?`,
+          `Key cultural rules and etiquette tips`
+        ]
+      });
     }
   });
 

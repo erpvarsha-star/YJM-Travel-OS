@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { arrayBufferToBase64, base64ToBytes, decodeAudioData, float32ToPCM16 } from '../services/audioUtils';
+import { hasGeminiKey, localConciergeReply } from '../services/localIntelligenceService';
 
 interface UseLiveGeminiReturn {
   isConnected: boolean;
@@ -91,6 +92,38 @@ export const useLiveGemini = (): UseLiveGeminiReturn => {
       // 2. Get Microphone Access
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
+
+      if (!hasGeminiKey()) {
+        const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+        if (!SpeechRecognition) {
+          setError('Voice is ready in dictation mode. Use the mic in chat if live audio is blocked.');
+          setIsConnected(true);
+          setIsConnecting(false);
+          return;
+        }
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+        recognition.onresult = (event: any) => {
+          const last = event.results[event.results.length - 1];
+          if (!last?.isFinal) return;
+          const spoken = last[0].transcript;
+          const reply = localConciergeReply(spoken).text.replace(/```json[\s\S]*?```/g, '').replace(/\*\*/g, '');
+          if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            const utter = new SpeechSynthesisUtterance(reply.slice(0, 420));
+            utter.rate = 1;
+            window.speechSynthesis.speak(utter);
+          }
+        };
+        recognition.onerror = () => setError('Listening paused. Tap End Session to close.');
+        recognition.start();
+        sessionRef.current = { close: () => recognition.stop() };
+        setIsConnected(true);
+        setIsConnecting(false);
+        return;
+      }
 
       // 3. Connect to Gemini Live
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });

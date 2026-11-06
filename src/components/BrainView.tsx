@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Trip, BrainNote, Activity } from '../types';
 import { synthesizeBrainNoteAI } from '../../services/travelBrainService';
+import { suggestedActivitiesFromNote } from '../../services/localIntelligenceService';
 import { 
   Sparkles, 
   Tag, 
@@ -47,7 +48,8 @@ export const BrainView: React.FC<BrainViewProps> = ({ trip, onUpdateTrip }) => {
         destination: trip.destination,
         durationDays: trip.durationDays
       });
-      setSynthesisResult(data);
+      const suggested = suggestedActivitiesFromNote(noteInput, trip.destination);
+      setSynthesisResult({ ...data, suggestedActivities: suggested });
 
       // Create new Brain Note in trip
       const newNote: BrainNote = {
@@ -62,7 +64,7 @@ export const BrainView: React.FC<BrainViewProps> = ({ trip, onUpdateTrip }) => {
 
       onUpdateTrip({
         ...trip,
-        brainNotes: [newNote, ...trip.brainNotes],
+        brainNotes: [newNote, ...(trip.brainNotes || [])],
       });
 
       setNoteInput('');
@@ -80,7 +82,7 @@ export const BrainView: React.FC<BrainViewProps> = ({ trip, onUpdateTrip }) => {
       };
       onUpdateTrip({
         ...trip,
-        brainNotes: [fallbackNote, ...trip.brainNotes],
+        brainNotes: [fallbackNote, ...(trip.brainNotes || [])],
       });
       setNoteInput('');
     } finally {
@@ -96,13 +98,14 @@ export const BrainView: React.FC<BrainViewProps> = ({ trip, onUpdateTrip }) => {
       description: act.insiderTip || 'Added from Brain synthesis.',
       category: act.category || 'culture',
       location: trip.destination,
-      estimatedCost: act.estimatedCost || 0,
+      cost: act.estimatedCost || act.cost || 0,
+      estimatedCost: act.estimatedCost || act.cost || 0,
       durationMinutes: act.durationMinutes || 60,
       insiderTip: act.insiderTip,
       completed: false,
     };
 
-    const updatedItinerary = trip.itinerary.map((day) => {
+    const updatedItinerary = (trip.itinerary || []).map((day) => {
       if (day.dayNumber === targetDayNumber) {
         return {
           ...day,
@@ -121,7 +124,7 @@ export const BrainView: React.FC<BrainViewProps> = ({ trip, onUpdateTrip }) => {
   const handleDeleteNote = (noteId: string) => {
     onUpdateTrip({
       ...trip,
-      brainNotes: trip.brainNotes.filter((n) => n.id !== noteId),
+      brainNotes: (trip.brainNotes || []).filter((n) => n.id !== noteId),
     });
   };
 
@@ -131,7 +134,7 @@ export const BrainView: React.FC<BrainViewProps> = ({ trip, onUpdateTrip }) => {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const filteredNotes = trip.brainNotes.filter((n) => {
+  const filteredNotes = (trip.brainNotes || []).filter((n) => {
     if (activeFilter === 'all') return true;
     return n.type === activeFilter;
   });
@@ -197,7 +200,7 @@ export const BrainView: React.FC<BrainViewProps> = ({ trip, onUpdateTrip }) => {
               className="inline-flex items-center space-x-2 bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs sm:text-sm px-4 py-2 rounded-xl transition-all shadow-sm disabled:opacity-50"
             >
               <Sparkles className={`h-4 w-4 ${isSynthesizing ? 'animate-spin' : ''}`} />
-              <span>{isSynthesizing ? 'Gemini Synthesizing...' : 'Synthesize Brain Note'}</span>
+              <span>{isSynthesizing ? 'Synthesizing note...' : 'Synthesize Brain Note'}</span>
             </button>
           </div>
         </form>
@@ -268,7 +271,7 @@ export const BrainView: React.FC<BrainViewProps> = ({ trip, onUpdateTrip }) => {
                       </div>
 
                       <div className="flex items-center space-x-1 shrink-0">
-                        {trip.itinerary.slice(0, 3).map((day) => (
+                        {(trip.itinerary || []).slice(0, 3).map((day) => (
                           <button
                             key={day.dayNumber}
                             onClick={() => handleAddSuggestedActivity(act, day.dayNumber)}
@@ -293,7 +296,7 @@ export const BrainView: React.FC<BrainViewProps> = ({ trip, onUpdateTrip }) => {
         <div className="flex items-center justify-between border-b border-stone-200 pb-2">
           <div className="flex items-center space-x-2">
             <span className="text-xs font-bold uppercase tracking-wider text-stone-500">
-              Brain Vault ({trip.brainNotes.length})
+              Brain Vault ({(trip.brainNotes || []).length})
             </span>
           </div>
 

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Trip, CulturalInsight } from '../types';
+import { generateCulturalInsights } from '../../services/localIntelligenceService';
 import { 
   ShieldAlert, 
   Languages, 
@@ -52,22 +53,28 @@ export const CulturalView: React.FC<CulturalViewProps> = ({ trip, onUpdateTrip }
   const handleRefreshCulture = async () => {
     setIsRefreshing(true);
     try {
-      const res = await fetch('/api/cultural/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          destination: trip.destination,
-          country: trip.country,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.emergencyNumbers) {
-        onUpdateTrip({
-          ...trip,
-          culturalInsights: data,
+      let data: CulturalInsight | null = null;
+      try {
+        const res = await fetch('/api/cultural/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            destination: trip.destination,
+            country: trip.country,
+          }),
         });
+        if (res.ok) {
+          const parsed = await res.json();
+          if (parsed.emergencyNumbers) data = parsed;
+        }
+      } catch {
+        data = null;
       }
+      if (!data) data = generateCulturalInsights(trip.destination, trip.country);
+      onUpdateTrip({
+        ...trip,
+        culturalInsights: data,
+      });
     } catch (err) {
       console.error('Failed to generate cultural insights:', err);
     } finally {
@@ -107,7 +114,7 @@ export const CulturalView: React.FC<CulturalViewProps> = ({ trip, onUpdateTrip }
           className="inline-flex items-center space-x-2 bg-stone-900 hover:bg-stone-800 text-white px-3.5 py-2 rounded-xl text-xs font-medium transition-colors disabled:opacity-50 shrink-0"
         >
           <Sparkles className={`h-3.5 w-3.5 text-amber-400 ${isRefreshing ? 'animate-spin' : ''}`} />
-          <span>{isRefreshing ? 'Gemini Researching...' : 'Gemini Refresh Guide'}</span>
+          <span>{isRefreshing ? 'Refreshing local guide...' : 'Refresh Local Guide'}</span>
         </button>
       </div>
 
