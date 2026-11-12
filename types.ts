@@ -1,4 +1,11 @@
 
+export interface SearchFormData {
+  departure: string;
+  destination: string;
+  date: string;
+  travelers: number;
+}
+
 export interface Source {
   title: string;
   uri: string;
@@ -136,7 +143,7 @@ export interface Activity {
   category: 'food' | 'culture' | 'adventure' | 'chill' | 'transit' | 'stay';
   location: string;
   description: string;
-  cost: number;
+  cost?: number;
   estimatedCost?: number;
   durationMinutes: number;
   insiderTip?: string;

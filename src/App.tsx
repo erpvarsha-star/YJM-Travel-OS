@@ -340,7 +340,7 @@ export default function App() {
                         )}
                         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
                           {activeTrip.strategies.filter(s => s.type !== 'balanced').map((s: Strategy, i) => (
-                             <StrategyCard key={i} strategy={s} onDecide={() => handleDecide(s.title)} />
+                             <StrategyCard strategy={s} onDecide={() => handleDecide(s.title)} />
                           ))}
                         </div>
                       </div>
