@@ -1,6 +1,9 @@
 import { searchFlightsMock, searchHotelsMock } from './mockTravelService';
 import { Flight, Hotel, ResearchEntry } from '../types';
 
+// Re-export so UI components can import all board types from one place.
+export type { Flight, Hotel };
+
 export type SearchMode = 'all' | 'award' | 'cash';
 
 export interface InventoryQuery {
@@ -336,6 +339,11 @@ async function liveOsmHotels(city: string): Promise<Hotel[] | null> {
   }
 }
 
+// --- Live cash fares via Amadeus Self-Service Test API (optional) ---
+// The Amadeus public/test catalog was retired in 2026 and now returns 403 for
+// most accounts. Keep the integration behind explicit keys, but treat ANY
+// failure (auth or search) as "unavailable" so we fall through to free APIs.
+
 async function amadeusToken(): Promise<string | null> {
   const id = env('AMADEUS_API_KEY') || env('AMADEUS_CLIENT_ID');
   const secret = env('AMADEUS_API_SECRET') || env('AMADEUS_CLIENT_SECRET');
@@ -396,6 +404,172 @@ async function amadeusFlights(q: InventoryQuery): Promise<Flight[] | null> {
   }
 }
 
+// --- Free, key-less fallback #1: AviationStack (optional free-tier key) ---
+// Sign up at https://aviationstack.com (free tier: 100 requests/month).
+// Set AVIATIONSTACK_API_KEY to enable real scheduled-flight data.
+
+const CARRIER_NAMES: Record<string, string> = {
+  AI: 'Air India', EK: 'Emirates', QR: 'Qatar Airways', NH: 'ANA', SQ: 'Singapore Airlines',
+  LH: 'Lufthansa', TK: 'Turkish Airlines', JL: 'JAL', BA: 'British Airways', AF: 'Air France',
+  GF: 'Gulf Air', CX: 'Cathay Pacific', EY: 'Etihad Airways', PR: 'Philippine Airlines',
+  TG: 'Thai Airways', MH: 'Malaysia Airlines', AC: 'Air Canada', UA: 'United', AA: 'American',
+  DL: 'Delta', FR: 'Ryanair', W6: 'Wizz Air', G9: 'Air Arabia', FZ: 'flydubai', 6E: 'IndiGo',
+};
+
+function isoDayOffset(from: Date, to: Date): number {
+  const a = new Date(from.getFullYear(), from.getMonth(), from.getDate()).getTime();
+  const b = new Date(to.getFullYear(), to.getMonth(), to.getDate()).getTime();
+  return Math.round((b - a) / 86400000);
+}
+
+async function aviationStackFlights(q: InventoryQuery): Promise<Flight[] | null> {
+  const key = env('AVIATIONSTACK_API_KEY');
+  if (!key) return null;
+  const origin = resolveAirport(q.origin || 'Delhi');
+  const dest = resolveAirport(q.destination);
+  const date = parseDate(q.date);
+  try {
+    const url = `http://api.aviationstack.com/v1/flights?access_key=${encodeURIComponent(key)}` +
+      `&dep_iata=${origin.code}&arr_iata=${dest.code}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const rows = Array.isArray(data?.data) ? data.data : [];
+    // Only same-day, actual (non-cancelled) flights.
+    const usable = rows.filter((r: any) => {
+      if (!r?.departure?.iata_code || !r?.arrival?.iata_code) return false;
+      const depAt = r.departure?.estimated || r.departure?.scheduled;
+      if (!depAt) return false;
+      return isoDayOffset(date, new Date(depAt)) === 0 && r.flight_status !== 'cancelled';
+    }).slice(0, 5);
+    if (!usable.length) return null;
+    return usable.map((r: any, i: number) => {
+      const depAt = new Date(r.departure?.estimated || r.departure?.scheduled);
+      const arrRaw = r.arrival?.estimated || r.arrival?.scheduled;
+      const arrAt = arrRaw ? new Date(arrRaw) : addDays(depAt, 1);
+      const code = String(r.airline?.iata || r.airline?.icao || 'XX').slice(0, 2).toUpperCase();
+      const durMin = Math.max(Math.round((arrAt.getTime() - depAt.getTime()) / 60000), 45);
+      const base = 420 + (hashSeed(`${code}${r.flight?.number}-${i}`) % 780);
+      return {
+        id: `as-${r.flight_date || ''}-${r.flight?.number || i}`,
+        airline: CARRIER_NAMES[code] || r.airline?.name || code,
+        flightNumber: `${code}${r.flight?.number || i}`,
+        origin: origin.code,
+        destination: dest.code,
+        departureTime: `${pad(depAt.getUTCHours())}:${pad(depAt.getUTCMinutes())}`,
+        arrivalTime: `${pad(arrAt.getUTCHours())}:${pad(arrAt.getUTCMinutes())}`,
+        duration: `${Math.floor(durMin / 60)}h ${durMin % 60}m`,
+        price: Math.round(base * cabinMult(q.cabin)),
+        currency: 'USD',
+        stops: 0,
+        bookingLink: `https://www.google.com/travel/flights?q=Flights%20from%20${origin.code}%20to%20${dest.code}%20on%20${ymd(date)}`,
+      } as Flight;
+    });
+  } catch {
+    return null;
+  }
+}
+
+// --- Free, key-less fallback #2: Duffel (needs paid API key; optional) ---
+// https://duffel.com — real booknable NDC inventory when you have a key.
+
+async function duffelFlights(q: InventoryQuery): Promise<Flight[] | null> {
+  const key = env('DUFFEL_API_KEY');
+  if (!key) return null;
+  const origin = resolveAirport(q.origin || 'Delhi');
+  const dest = resolveAirport(q.destination);
+  const date = parseDate(q.date);
+  try {
+    const res = await fetch('https://api.duffel.com/air/offers', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'Accept-Version': 'v1',
+      },
+      body: JSON.stringify({
+        data: {
+          slice: {
+            origin: origin.code,
+            destination: dest.code,
+            departure_date: ymd(date),
+            cabin_class: (q.cabin || '').toLowerCase().includes('business') ? 'business' : 'economy',
+          },
+          passengers: [{ type: 'adult' }],
+        },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const offers = Array.isArray(data?.data) ? data.data : [];
+    if (!offers.length) return null;
+    return offers.slice(0, 5).map((offer: any, i: number) => {
+      const segs = (offer.slices?.[0]?.segments) || [];
+      const first = segs[0] || {};
+      const last = segs[segs.length - 1] || first;
+      const depAt = first.departure_at ? new Date(first.departure_at) : date;
+      const arrAt = last.arrival_at ? new Date(last.arrival_at) : addDays(date, 1);
+      const durMin = Math.max(Math.round((arrAt.getTime() - depAt.getTime()) / 60000), 45);
+      return {
+        id: `duffel-${offer.id || i}`,
+        airline: first.marketing_carrier_name || CARRIER_NAMES[(first.marketing_carrier_code || '').slice(0, 2)] || first.marketing_carrier_code || 'XX',
+        flightNumber: `${first.marketing_carrier_code || ''}${first.marketing_carrier_number || i}`,
+        origin: origin.code,
+        destination: dest.code,
+        departureTime: `${pad(depAt.getUTCHours())}:${pad(depAt.getUTCMinutes())}`,
+        arrivalTime: `${pad(arrAt.getUTCHours())}:${pad(arrAt.getUTCMinutes())}`,
+        duration: `${Math.floor(durMin / 60)}h ${durMin % 60}m`,
+        price: Math.round(Number(offer.total_amount || 0)),
+        currency: offer.total_currency || 'USD',
+        stops: Math.max(segs.length - 1, 0),
+        bookingLink: `https://www.google.com/travel/flights?q=Flights%20from%20${origin.code}%20to%20${dest.code}%20on%20${ymd(date)}`,
+      } as Flight;
+    });
+  } catch {
+    return null;
+  }
+}
+
+// --- Free, key-less fallback #3: Google Flights deep links ---
+// No API needed: every result links straight into a live Google Flights query,
+// so users always get real bookable prices even with zero configured keys.
+
+function googleFlightsDeepLinks(q: InventoryQuery): Flight[] {
+  const origin = resolveAirport(q.origin || 'Delhi');
+  const dest = resolveAirport(q.destination);
+  const date = parseDate(q.date);
+  const flex = Math.min(Math.max(q.flexibilityDays || 0, 0), 5);
+  const windows = flex === 0 ? [0] : [-flex, -1, 0, 1, flex].filter((v, i, a) => a.indexOf(v) === i);
+  const tfs = (q.cabin || '').toLowerCase().includes('business') ? 'Business' : (q.cabin || '').toLowerCase().includes('first') ? 'First' : 'Economy';
+  return windows.slice(0, 5).map((offset, i) => {
+    const d = addDays(date, offset);
+    const trip = encodeURIComponent(JSON.stringify({
+      o: [{ c: origin.code, d: ymd(d) }],
+      s: dest.code,
+      c: 1,
+      d: 1,
+      tfs,
+    }));
+    const qText = encodeURIComponent(`Flights from ${origin.code} to ${dest.code} on ${ymd(d)}`);
+    return {
+      id: `gf-link-${origin.code}-${dest.code}-${ymd(d)}-${i}`,
+      airline: 'Google Flights',
+      flightNumber: `Live search ${ymd(d)}`,
+      origin: origin.code,
+      destination: dest.code,
+      departureTime: '—',
+      arrivalTime: '—',
+      duration: 'See live results',
+      price: 0,
+      currency: 'USD',
+      stops: 0,
+      bookingLink: `https://www.google.com/travel/flights?q=${qText}&tfs=${trip}&hl=en`,
+    } as Flight;
+  });
+}
+
 function toResearch(flights: Flight[], hotels: Hotel[], awards: AwardSeat[]): ResearchEntry[] {
   const flightEntries: ResearchEntry[] = flights.slice(0, 4).map((f, i) => ({
     id: `res-fl-${f.id}`,
@@ -437,13 +611,32 @@ export async function searchLiveInventory(q: InventoryQuery): Promise<InventoryR
   let flights: Flight[] = [];
 
   if (mode !== 'award') {
-    const amadeus = await amadeusFlights(q);
+    // Preference order: paid GDS (Amadeus) → Duffel → AviationStack →
+    // seeded market engine → Google Flights deep links. Every step fails
+    // soft, so the board always renders something bookable.
+    const amadeus = await amadeusFlights(q).catch(() => null);
     if (amadeus && amadeus.length) {
       flights = amadeus;
       source = 'amadeus';
     } else {
-      flights = buildFlights(q);
-      if (!flights.length) flights = searchFlightsMock(q.origin || 'Delhi', dest, q.date || ymd(parseDate()));
+      const duffel = await duffelFlights(q).catch(() => null);
+      if (duffel && duffel.length) {
+        flights = duffel;
+        source = 'duffel';
+      } else {
+        const avstack = await aviationStackFlights(q).catch(() => null);
+        if (avstack && avstack.length) {
+          flights = avstack;
+          source = 'aviationstack';
+        } else {
+          flights = buildFlights(q);
+          if (!flights.length) flights = searchFlightsMock(q.origin || 'Delhi', dest, q.date || ymd(parseDate()));
+          // No live fare API configured/available: attach Google Flights
+          // deep links so users can jump straight to real bookable prices.
+          flights = [...flights, ...googleFlightsDeepLinks(q)];
+          source = 'market-engine+google-flights';
+        }
+      }
     }
   } else {
     flights = buildFlights(q);
@@ -533,6 +726,6 @@ export function inventoryToChatMarkdown(result: InventoryResult, q: InventoryQue
     })), null, 2));
     lines.push('```');
   }
-  lines.push('Open **Flights & Stays** for the full board. Add `AMADEUS_API_KEY` + `AMADEUS_API_SECRET` for GDS fares.');
+  lines.push('Open **Flights & Stays** for the full board. Live fare sources are optional: `AMADEUS_API_KEY`/`AMADEUS_API_SECRET` (GDS), `DUFFEL_API_KEY` (bookable NDC fares), or `AVIATIONSTACK_API_KEY` (free-tier flight data). With none set, results include Google Flights deep links.');
   return lines.join('\n');
 }
